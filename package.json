@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --port 3107",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "node scripts/serve-static.mjs out 3107",
+    "preview": "node scripts/serve-static.mjs out 3107",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "city:build": "node scripts/build-city-snapshot.mjs",
+    "city:archive": "node scripts/archive-city-package.mjs",
+    "city:build:mexico-city": "node scripts/generate-mexico-city-data.mjs"
   },
   "dependencies": {
     "next": "16.2.4",
@@ -21,6 +27,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.4"
   }
 }

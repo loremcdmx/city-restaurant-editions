@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# City Restaurant Editions
 
-## Getting Started
+Editorial restaurant explorer built on Next.js 16. The UI is city-agnostic now: each city ships as a dataset package, gets registered once, and can be opened from its own route.
 
-First, run the development server:
+## Current routes
+
+- `/` -> default city edition
+- `/mexico-city` -> Mexico City edition
+
+## Core structure
+
+- `src/lib/city-dataset.ts` - generic dataset builder and city meta model
+- `src/lib/city-registry.ts` - registry of available city editions
+- `src/data/cities/<city-id>/index.ts` - city package assembly
+- `src/components/city-restaurant-explorer.tsx` - generic explorer entrypoint
+- `scripts/city-configs/<city-id>.mjs` - scrape config for snapshot generation
+- `.city-cache/<city-id>/latest` - latest cached share bundle
+
+## Run locally
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+App runs on [http://localhost:3107](http://localhost:3107).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build a city snapshot
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run city:build -- mexico-city
+```
 
-## Learn More
+This writes:
 
-To learn more about Next.js, take a look at the following resources:
+- `src/data/generated/<city-id>-snapshot.json`
+- `.city-cache/<city-id>/latest/`
+- `.city-cache/<city-id>/<city-id>-package.zip` on Windows when zip creation succeeds
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Archive an existing city package
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run city:archive -- mexico-city
+```
 
-## Deploy on Vercel
+## Add a new city
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Add `scripts/city-configs/<city-id>.mjs` with city metadata and Wanderlog source URLs.
+2. Run `npm run city:build -- <city-id>`.
+3. Add editorial copy and overrides:
+   - `src/data/<city-id>-english-copy.ts`
+   - `src/data/<city-id>-overrides.ts`
+4. Create `src/data/cities/<city-id>/index.ts` using `buildRestaurantDataset(...)`.
+5. Register the dataset in `src/lib/city-registry.ts`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+After that the edition is available at `/<city-id>`.
