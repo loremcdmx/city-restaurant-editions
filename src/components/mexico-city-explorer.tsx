@@ -1,7 +1,6 @@
 ﻿"use client";
 
 import Image from "next/image";
-import dynamic from "next/dynamic";
 import {
   useCallback,
   useDeferredValue,
@@ -10,7 +9,11 @@ import {
   useRef,
   useState,
 } from "react";
-import type { MediaViewerItem } from "@/components/restaurant-media-lightbox";
+import { RestaurantBookingWorkbench } from "@/components/restaurant-booking-workbench";
+import {
+  RestaurantMediaLightbox,
+  type MediaViewerItem,
+} from "@/components/restaurant-media-lightbox";
 import type {
   CityRestaurantExplorerPayload,
   RestaurantListItem,
@@ -75,6 +78,29 @@ const VIEW_DECKS: Record<ViewMode, string> = {
     "A cleaner entry into the city through a specific cuisine instead of generic noise.",
 };
 
+const VIEW_MODES = Object.keys(VIEW_LABELS) as ViewMode[];
+const DEFAULT_VIEW_MODE: ViewMode = "global";
+const SHARE_STATUS_DURATION_MS = 1800;
+
+export type ExplorerUrlStateOptions = {
+  defaultBands: PriceBand[];
+  defaultCuisine: CuisineKey;
+  defaultSlug: string;
+  validCuisineKeys: CuisineKey[];
+  validPriceBands: PriceBand[];
+  validRestaurantSlugs: string[];
+};
+
+export type ExplorerUrlState = {
+  bookableOnly: boolean;
+  only500Plus: boolean;
+  search: string;
+  selectedBands: PriceBand[];
+  selectedCuisine: CuisineKey;
+  selectedSlug: string;
+  viewMode: ViewMode;
+};
+
 type CityRestaurantExplorerProps = {
   payload: CityRestaurantExplorerPayload;
 };
@@ -83,34 +109,6 @@ type RestaurantMapTarget = Pick<Restaurant, "name" | "address">;
 
 const DETAIL_PREFETCH_WINDOW = 4;
 const DETAIL_PREFETCH_DELAY_MS = 260;
-
-const RestaurantBookingWorkbench = dynamic(
-  () =>
-    import("@/components/restaurant-booking-workbench").then(
-      (module) => module.RestaurantBookingWorkbench,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <section className="booking-workbench booking-workbench--loading">
-        <div className="booking-workbench__loading">
-          <strong>Loading booking model</strong>
-          <p>Preparing the 10-day availability view.</p>
-        </div>
-      </section>
-    ),
-  },
-);
-
-const RestaurantMediaLightbox = dynamic(
-  () =>
-    import("@/components/restaurant-media-lightbox").then(
-      (module) => module.RestaurantMediaLightbox,
-    ),
-  {
-    ssr: false,
-  },
-);
 
 function formatReviewCount(value: number | null, locale = "en-US") {
   if (value === null || value === undefined) {
@@ -612,6 +610,110 @@ function updateFlagRecord(
   return next;
 }
 
+function hasSameMembers<T extends string>(left: T[], right: T[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const rightValues = new Set(right);
+
+  return left.every((value) => rightValues.has(value));
+}
+
+function isViewMode(value: string | null): value is ViewMode {
+  return value !== null && VIEW_MODES.includes(value as ViewMode);
+}
+
+function sanitizeSearch(value: string | null) {
+  return (value ?? "").trim().slice(0, 80);
+}
+
+function parseSelectedBands(
+  value: string | null,
+  options: ExplorerUrlStateOptions,
+) {
+  if (!value) {
+    return options.defaultBands;
+  }
+
+  const validBands = new Set(options.validPriceBands);
+  const selectedBands = value
+    .split(",")
+    .map((band) => band.trim())
+    .filter((band): band is PriceBand => validBands.has(band as PriceBand));
+
+  return selectedBands.length > 0 ? selectedBands : options.defaultBands;
+}
+
+export function readExplorerUrlState(
+  params: URLSearchParams,
+  options: ExplorerUrlStateOptions,
+): ExplorerUrlState {
+  const selectedCuisine = params.get("cuisine");
+  const selectedSlug = params.get("restaurant");
+  const validCuisineKeys = new Set(options.validCuisineKeys);
+  const validRestaurantSlugs = new Set(options.validRestaurantSlugs);
+
+  return {
+    bookableOnly: params.get("bookable") === "1",
+    only500Plus: params.get("reviews") === "500",
+    search: sanitizeSearch(params.get("q")),
+    selectedBands: parseSelectedBands(params.get("prices"), options),
+    selectedCuisine:
+      selectedCuisine && validCuisineKeys.has(selectedCuisine)
+        ? selectedCuisine
+        : options.defaultCuisine,
+    selectedSlug:
+      selectedSlug && validRestaurantSlugs.has(selectedSlug)
+        ? selectedSlug
+        : options.defaultSlug,
+    viewMode: isViewMode(params.get("view"))
+      ? (params.get("view") as ViewMode)
+      : DEFAULT_VIEW_MODE,
+  };
+}
+
+export function buildExplorerSearchParams(
+  state: ExplorerUrlState,
+  options: ExplorerUrlStateOptions,
+) {
+  const params = new URLSearchParams();
+  const search = sanitizeSearch(state.search);
+
+  if (state.viewMode !== DEFAULT_VIEW_MODE) {
+    params.set("view", state.viewMode);
+  }
+
+  if (state.selectedSlug !== options.defaultSlug) {
+    params.set("restaurant", state.selectedSlug);
+  }
+
+  if (search) {
+    params.set("q", search);
+  }
+
+  if (state.only500Plus) {
+    params.set("reviews", "500");
+  }
+
+  if (state.bookableOnly) {
+    params.set("bookable", "1");
+  }
+
+  if (
+    state.viewMode === "cuisine" &&
+    state.selectedCuisine !== options.defaultCuisine
+  ) {
+    params.set("cuisine", state.selectedCuisine);
+  }
+
+  if (!hasSameMembers(state.selectedBands, options.defaultBands)) {
+    params.set("prices", state.selectedBands.join(","));
+  }
+
+  return params;
+}
+
 export function CityRestaurantExplorer({
   payload,
 }: CityRestaurantExplorerProps) {
@@ -621,24 +723,51 @@ export function CityRestaurantExplorer({
   const priceBandOptions = payload.priceBandOptions;
   const defaultRestaurantSummary = restaurants[0]!;
   const defaultRestaurant = payload.initialRestaurant;
-  const [viewMode, setViewMode] = useState<ViewMode>("global");
+  const allPriceBands = useMemo(
+    () => priceBandOptions.map((option) => option.key),
+    [priceBandOptions],
+  );
+  const defaultCuisine = cuisineOptions[0]?.key ?? "";
+  const urlStateOptions = useMemo<ExplorerUrlStateOptions>(
+    () => ({
+      defaultBands: allPriceBands,
+      defaultCuisine,
+      defaultSlug:
+        restaurants.find((restaurant) => restaurant.slug === defaultRestaurant.slug)
+          ?.slug ?? defaultRestaurantSummary.slug,
+      validCuisineKeys: cuisineOptions.map((option) => option.key),
+      validPriceBands: allPriceBands,
+      validRestaurantSlugs: restaurants.map((restaurant) => restaurant.slug),
+    }),
+    [
+      allPriceBands,
+      cuisineOptions,
+      defaultCuisine,
+      defaultRestaurant.slug,
+      defaultRestaurantSummary.slug,
+      restaurants,
+    ],
+  );
+  const hydratedUrlRef = useRef(false);
+  const shareStatusTimerRef = useRef<number | null>(null);
+  const shouldScrollSelectedRef = useRef(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const normalizedSearch = deferredSearch.trim().toLowerCase();
   const [only500Plus, setOnly500Plus] = useState(false);
   const [bookableOnly, setBookableOnly] = useState(false);
   const [selectedCuisine, setSelectedCuisine] =
-    useState<CuisineKey>(cuisineOptions[0]?.key ?? "");
+    useState<CuisineKey>(defaultCuisine);
   const activeCuisine =
     cuisineOptions.find((option) => option.key === selectedCuisine)?.key ??
-    cuisineOptions[0]?.key ??
+    defaultCuisine ??
     "";
-  const [selectedBands, setSelectedBands] = useState<PriceBand[]>([
-    "budget",
-    "mid",
-    "high",
-    "destination",
-  ]);
+  const [selectedBands, setSelectedBands] =
+    useState<PriceBand[]>(allPriceBands);
+  const [shareStatus, setShareStatus] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   const rankingListRef = useRef<HTMLOListElement | null>(null);
   const [restaurantDetails, setRestaurantDetails] = useState<
     Record<string, Restaurant>
@@ -698,9 +827,54 @@ export function CityRestaurantExplorer({
   ]);
 
   const [selectedSlug, setSelectedSlug] = useState<string>(
-    restaurants.find((restaurant) => restaurant.slug === defaultRestaurant.slug)?.slug ??
-      defaultRestaurantSummary.slug,
+    urlStateOptions.defaultSlug,
   );
+  const applyUrlState = useCallback((shouldScroll = false) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    shouldScrollSelectedRef.current = shouldScroll;
+
+    const nextState = readExplorerUrlState(
+      new URLSearchParams(window.location.search),
+      urlStateOptions,
+    );
+
+    setViewMode(nextState.viewMode);
+    setSearch(nextState.search);
+    setOnly500Plus(nextState.only500Plus);
+    setBookableOnly(nextState.bookableOnly);
+    setSelectedCuisine(nextState.selectedCuisine);
+    setSelectedBands(nextState.selectedBands);
+    setSelectedSlug(nextState.selectedSlug);
+  }, [
+    setBookableOnly,
+    setOnly500Plus,
+    setSearch,
+    setSelectedBands,
+    setSelectedCuisine,
+    setSelectedSlug,
+    setViewMode,
+    urlStateOptions,
+  ]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      applyUrlState();
+      hydratedUrlRef.current = true;
+    }, 0);
+
+    const handlePopState = () => applyUrlState(true);
+
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [applyUrlState]);
+
   const activeSelectedSlug =
     filteredRestaurants.find((restaurant) => restaurant.slug === selectedSlug)?.slug ??
     filteredRestaurants[0]?.slug ??
@@ -716,6 +890,48 @@ export function CityRestaurantExplorer({
     (!detailRestaurant && !detailErrors[activeSelectedSlug]);
   const hasDetailError =
     Boolean(detailErrors[activeSelectedSlug]) && !detailRestaurant;
+  const hasResults = filteredRestaurants.length > 0;
+  const hasActiveFilters =
+    search.trim().length > 0 ||
+    only500Plus ||
+    bookableOnly ||
+    !hasSameMembers(selectedBands, allPriceBands) ||
+    viewMode === "cuisine";
+
+  useEffect(() => {
+    if (!hydratedUrlRef.current || typeof window === "undefined") {
+      return;
+    }
+
+    const params = buildExplorerSearchParams(
+      {
+        bookableOnly,
+        only500Plus,
+        search,
+        selectedBands,
+        selectedCuisine: activeCuisine,
+        selectedSlug: activeSelectedSlug,
+        viewMode,
+      },
+      urlStateOptions,
+    );
+    const query = params.toString();
+    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
+
+    if (nextUrl !== currentUrl) {
+      window.history.replaceState(null, "", nextUrl);
+    }
+  }, [
+    activeCuisine,
+    activeSelectedSlug,
+    bookableOnly,
+    only500Plus,
+    search,
+    selectedBands,
+    urlStateOptions,
+    viewMode,
+  ]);
 
   const fetchRestaurantDetail = useCallback(
     async (slug: string) => {
@@ -915,16 +1131,85 @@ export function CityRestaurantExplorer({
 
   const selectRestaurant = useCallback((slug: string) => {
     closeViewer();
+    shouldScrollSelectedRef.current = true;
     void fetchRestaurantDetail(slug);
     setSelectedSlug(slug);
-  }, [closeViewer, fetchRestaurantDetail]);
+  }, [closeViewer, fetchRestaurantDetail, setSelectedSlug]);
+
+  const resetFilters = useCallback(() => {
+    closeViewer();
+    setViewMode(DEFAULT_VIEW_MODE);
+    setSearch("");
+    setOnly500Plus(false);
+    setBookableOnly(false);
+    setSelectedCuisine(defaultCuisine);
+    setSelectedBands(allPriceBands);
+    setSelectedSlug(urlStateOptions.defaultSlug);
+  }, [
+    allPriceBands,
+    closeViewer,
+    defaultCuisine,
+    setBookableOnly,
+    setOnly500Plus,
+    setSearch,
+    setSelectedBands,
+    setSelectedCuisine,
+    setSelectedSlug,
+    setViewMode,
+    urlStateOptions.defaultSlug,
+  ]);
+
+  const copyCurrentViewLink = useCallback(async () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(window.location.href);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = window.location.href;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.append(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      setShareStatus("copied");
+    } catch {
+      setShareStatus("failed");
+    }
+
+    if (shareStatusTimerRef.current !== null) {
+      window.clearTimeout(shareStatusTimerRef.current);
+    }
+
+    shareStatusTimerRef.current = window.setTimeout(() => {
+      setShareStatus("idle");
+      shareStatusTimerRef.current = null;
+    }, SHARE_STATUS_DURATION_MS);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (shareStatusTimerRef.current !== null) {
+        window.clearTimeout(shareStatusTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const container = rankingListRef.current;
 
-    if (!container) {
+    if (!container || !shouldScrollSelectedRef.current) {
       return;
     }
+
+    shouldScrollSelectedRef.current = false;
 
     const card = container.querySelector<HTMLElement>(
       `[data-restaurant-slug="${selectedRestaurant.slug}"]`,
@@ -1020,6 +1305,7 @@ export function CityRestaurantExplorer({
         return (
           <li key={restaurant.slug} className="ranking-list__row">
             <button
+              aria-current={isActive ? "true" : undefined}
               className={isActive ? "ranking-item is-active" : "ranking-item"}
               data-restaurant-slug={restaurant.slug}
               onFocus={() => {
@@ -1171,7 +1457,7 @@ export function CityRestaurantExplorer({
               alt={`${selectedRestaurant.name} ${index + 1}`}
               className="gallery-card__image"
               fill
-              loading={index < 2 ? "eager" : "lazy"}
+              loading={index < 4 ? "eager" : "lazy"}
               sizes={sizes}
               src={getGalleryImageSrc(image, "preview")}
             />
@@ -1353,6 +1639,13 @@ export function CityRestaurantExplorer({
     },
     [cityMeta.locale, cityMeta.timeZone, detailRestaurant],
   );
+  const topbarPreviewRestaurants = useMemo(
+    () =>
+      sortRestaurants(restaurants, "global")
+        .filter((restaurant) => restaurant.coverImage)
+        .slice(0, 3),
+    [restaurants],
+  );
 
   return (
     <div className="page-shell">
@@ -1382,15 +1675,45 @@ export function CityRestaurantExplorer({
             <span className="label">Lens</span>
             <strong>Global / Trending / Socials / Guides / Google / Cuisine</strong>
           </div>
+          {topbarPreviewRestaurants.length > 0 ? (
+            <figure
+              aria-label="Featured restaurant covers"
+              className="topbar__preview"
+            >
+              {topbarPreviewRestaurants.map((restaurant, index) =>
+                restaurant.coverImage ? (
+                  <button
+                    key={restaurant.slug}
+                    aria-label={`Open ${restaurant.name}`}
+                    className="topbar__previewItem"
+                    onClick={() => selectRestaurant(restaurant.slug)}
+                    type="button"
+                  >
+                    <Image
+                      alt={`${restaurant.name} restaurant preview`}
+                      className="topbar__previewImage"
+                      fill
+                      loading={index === 0 ? "eager" : "lazy"}
+                      preload={index === 0}
+                      sizes="(max-width: 720px) 30vw, 160px"
+                      src={getGalleryImageSrc(restaurant.coverImage, "card")}
+                    />
+                    <span>{restaurant.name}</span>
+                  </button>
+                ) : null,
+              )}
+            </figure>
+          ) : null}
         </div>
       </header>
 
       <section className="toolbar">
         <div className="toolbar__row">
-          <div className="segmented">
-            {(Object.keys(VIEW_LABELS) as ViewMode[]).map((mode) => (
+          <div className="segmented" aria-label="Ranking lens" role="group">
+            {VIEW_MODES.map((mode) => (
               <button
                 key={mode}
+                aria-pressed={mode === viewMode}
                 className={
                   mode === viewMode
                     ? "segmented__button is-active"
@@ -1403,7 +1726,11 @@ export function CityRestaurantExplorer({
               </button>
             ))}
           </div>
+          <label className="sr-only" htmlFor="restaurant-search">
+            Search restaurants
+          </label>
           <input
+            id="restaurant-search"
             className="search"
             placeholder="Search by name, district, or cuisine"
             value={search}
@@ -1435,6 +1762,7 @@ export function CityRestaurantExplorer({
               return (
                 <button
                   key={option.key}
+                  aria-pressed={active}
                   className={active ? "chip is-active" : "chip"}
                   onClick={() =>
                     setSelectedBands((current) =>
@@ -1463,6 +1791,7 @@ export function CityRestaurantExplorer({
                 return (
                   <button
                     key={option.key}
+                    aria-pressed={activeCuisine === option.key}
                     className={
                       activeCuisine === option.key ? "chip is-active" : "chip"
                     }
@@ -1479,6 +1808,30 @@ export function CityRestaurantExplorer({
             </div>
           </div>
         ) : null}
+
+        <div className="toolbar__row toolbar__row--actions">
+          <button
+            className="action action--compact"
+            disabled={!hasActiveFilters && activeSelectedSlug === urlStateOptions.defaultSlug}
+            onClick={resetFilters}
+            type="button"
+          >
+            Reset filters
+          </button>
+          <button
+            className="action action--primary action--compact"
+            onClick={() => {
+              void copyCurrentViewLink();
+            }}
+            type="button"
+          >
+            {shareStatus === "copied"
+              ? "Link copied"
+              : shareStatus === "failed"
+                ? "Copy failed"
+                : "Copy view link"}
+          </button>
+        </div>
       </section>
 
       <main className="content-grid">
@@ -1504,10 +1857,27 @@ export function CityRestaurantExplorer({
           </div>
 
           <ol ref={rankingListRef} className="ranking-list">
-            {rankingListContent}
+            {hasResults ? (
+              rankingListContent
+            ) : (
+              <li className="ranking-list__empty">
+                <strong>No restaurants match this view</strong>
+                <p>
+                  Loosen the search, add a price band, or reset the active filters.
+                </p>
+                <button
+                  className="action action--primary"
+                  onClick={resetFilters}
+                  type="button"
+                >
+                  Reset filters
+                </button>
+              </li>
+            )}
           </ol>
         </section>
 
+        {hasResults ? (
         <section className="details">
           <div className="section-head section-head--details details-head">
             <div className="details-head__copy">
@@ -1529,6 +1899,8 @@ export function CityRestaurantExplorer({
                   alt={`${selectedRestaurant.name} hero photo`}
                   className="details-head__heroImage"
                   fill
+                  loading="eager"
+                  preload
                   sizes="(max-width: 1180px) calc(100vw - 40px), 42vw"
                   src={getGalleryImageSrc(gallery[0], "hero")}
                 />
@@ -1917,6 +2289,25 @@ export function CityRestaurantExplorer({
             </article>
           </div>
         </section>
+        ) : (
+          <section className="details details--empty">
+            <div className="empty-detail">
+              <p className="section-kicker">{cityMeta.displayName}</p>
+              <h2>No matching shortlist</h2>
+              <p>
+                The current filter stack hides all {cityMeta.restaurantCount} restaurants.
+                Reset to the full editorial ranking or keep narrowing from a lighter base.
+              </p>
+              <button
+                className="action action--primary"
+                onClick={resetFilters}
+                type="button"
+              >
+                Show all restaurants
+              </button>
+            </div>
+          </section>
+        )}
       </main>
 
       {activeViewerItem && viewerIndex !== null ? (
