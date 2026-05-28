@@ -81,6 +81,7 @@ const VIEW_DECKS: Record<ViewMode, string> = {
 const VIEW_MODES = Object.keys(VIEW_LABELS) as ViewMode[];
 const DEFAULT_VIEW_MODE: ViewMode = "global";
 const SHARE_STATUS_DURATION_MS = 1800;
+const MAX_URL_SHORTLIST_SIZE = 20;
 
 export type ExplorerUrlStateOptions = {
   defaultBands: PriceBand[];
@@ -98,6 +99,7 @@ export type ExplorerUrlState = {
   selectedBands: PriceBand[];
   selectedCuisine: CuisineKey;
   selectedSlug: string;
+  shortlistSlugs: string[];
   viewMode: ViewMode;
 };
 
@@ -249,6 +251,43 @@ function buildMapsEmbedSrc(restaurant: RestaurantMapTarget, cityDisplayName: str
   const query = encodeURIComponent(buildMapsQuery(restaurant, cityDisplayName));
 
   return `https://www.google.com/maps?q=${query}&z=15&output=embed`;
+}
+
+async function writeClipboardText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+function buildShortlistPlanText(
+  cityDisplayName: string,
+  restaurants: RestaurantListItem[],
+) {
+  const lines = restaurants.map((restaurant, index) =>
+    [
+      `${index + 1}. ${restaurant.name}`,
+      `${restaurant.district} / ${restaurant.cuisineLabel}`,
+      `${formatPriceBandCompact(restaurant.priceBand)} spend`,
+      formatBookingPressure(restaurant.bookingPressure),
+      `best window: ${restaurant.bestWindow}`,
+      restaurant.bookingPlatform
+        ? `channel: ${formatReservationPlatform(restaurant.bookingPlatform)}`
+        : "channel: website / contact",
+    ].join(" - "),
+  );
+
+  return [`${cityDisplayName} restaurant shortlist`, "", ...lines].join("\n");
 }
 
 function formatAwardLabel(award: string) {
@@ -645,6 +684,35 @@ function parseSelectedBands(
   return selectedBands.length > 0 ? selectedBands : options.defaultBands;
 }
 
+function parseShortlistSlugs(
+  value: string | null,
+  options: ExplorerUrlStateOptions,
+) {
+  if (!value) {
+    return [];
+  }
+
+  const validSlugs = new Set(options.validRestaurantSlugs);
+  const shortlistSlugs: string[] = [];
+
+  for (const slug of value.split(",")) {
+    const normalizedSlug = slug.trim();
+
+    if (
+      validSlugs.has(normalizedSlug) &&
+      !shortlistSlugs.includes(normalizedSlug)
+    ) {
+      shortlistSlugs.push(normalizedSlug);
+    }
+
+    if (shortlistSlugs.length >= MAX_URL_SHORTLIST_SIZE) {
+      break;
+    }
+  }
+
+  return shortlistSlugs;
+}
+
 export function readExplorerUrlState(
   params: URLSearchParams,
   options: ExplorerUrlStateOptions,
@@ -667,6 +735,7 @@ export function readExplorerUrlState(
       selectedSlug && validRestaurantSlugs.has(selectedSlug)
         ? selectedSlug
         : options.defaultSlug,
+    shortlistSlugs: parseShortlistSlugs(params.get("shortlist"), options),
     viewMode: isViewMode(params.get("view"))
       ? (params.get("view") as ViewMode)
       : DEFAULT_VIEW_MODE,
@@ -686,6 +755,15 @@ export function buildExplorerSearchParams(
 
   if (state.selectedSlug !== options.defaultSlug) {
     params.set("restaurant", state.selectedSlug);
+  }
+
+  const shortlistSlugs = parseShortlistSlugs(
+    state.shortlistSlugs.join(","),
+    options,
+  );
+
+  if (shortlistSlugs.length > 0) {
+    params.set("shortlist", shortlistSlugs.join(","));
   }
 
   if (search) {
@@ -750,6 +828,7 @@ export function CityRestaurantExplorer({
   );
   const hydratedUrlRef = useRef(false);
   const shareStatusTimerRef = useRef<number | null>(null);
+  const shortlistStatusTimerRef = useRef<number | null>(null);
   const shouldScrollSelectedRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
   const [search, setSearch] = useState("");
@@ -768,6 +847,10 @@ export function CityRestaurantExplorer({
   const [shareStatus, setShareStatus] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
+  const [shortlistStatus, setShortlistStatus] = useState<
+    "idle" | "copied" | "failed"
+  >("idle");
+  const [shortlistSlugs, setShortlistSlugs] = useState<string[]>([]);
   const rankingListRef = useRef<HTMLOListElement | null>(null);
   const [restaurantDetails, setRestaurantDetails] = useState<
     Record<string, Restaurant>
@@ -848,6 +931,7 @@ export function CityRestaurantExplorer({
     setSelectedCuisine(nextState.selectedCuisine);
     setSelectedBands(nextState.selectedBands);
     setSelectedSlug(nextState.selectedSlug);
+    setShortlistSlugs(nextState.shortlistSlugs);
   }, [
     setBookableOnly,
     setOnly500Plus,
@@ -855,6 +939,7 @@ export function CityRestaurantExplorer({
     setSelectedBands,
     setSelectedCuisine,
     setSelectedSlug,
+    setShortlistSlugs,
     setViewMode,
     urlStateOptions,
   ]);
@@ -884,6 +969,28 @@ export function CityRestaurantExplorer({
     filteredRestaurants.find((restaurant) => restaurant.slug === activeSelectedSlug) ??
     filteredRestaurants[0] ??
     defaultRestaurantSummary;
+  const restaurantsBySlug = useMemo(
+    () => new Map(restaurants.map((restaurant) => [restaurant.slug, restaurant])),
+    [restaurants],
+  );
+  const shortlistRestaurants = useMemo(
+    () =>
+      shortlistSlugs
+        .map((slug) => restaurantsBySlug.get(slug))
+        .filter((restaurant): restaurant is RestaurantListItem =>
+          Boolean(restaurant),
+        ),
+    [restaurantsBySlug, shortlistSlugs],
+  );
+  const selectedRestaurantIsShortlisted = shortlistSlugs.includes(
+    selectedRestaurant.slug,
+  );
+  const shortlistDistricts = new Set(
+    shortlistRestaurants.map((restaurant) => restaurant.district),
+  ).size;
+  const shortlistBookableCount = shortlistRestaurants.filter(
+    (restaurant) => restaurant.bookingMode !== "walk-in",
+  ).length;
   const detailRestaurant = restaurantDetails[activeSelectedSlug] ?? null;
   const isDetailPending =
     Boolean(pendingDetailSlugs[activeSelectedSlug]) ||
@@ -911,6 +1018,7 @@ export function CityRestaurantExplorer({
         selectedBands,
         selectedCuisine: activeCuisine,
         selectedSlug: activeSelectedSlug,
+        shortlistSlugs,
         viewMode,
       },
       urlStateOptions,
@@ -929,6 +1037,7 @@ export function CityRestaurantExplorer({
     only500Plus,
     search,
     selectedBands,
+    shortlistSlugs,
     urlStateOptions,
     viewMode,
   ]);
@@ -1136,6 +1245,27 @@ export function CityRestaurantExplorer({
     setSelectedSlug(slug);
   }, [closeViewer, fetchRestaurantDetail, setSelectedSlug]);
 
+  const toggleShortlistRestaurant = useCallback((slug: string) => {
+    setShortlistSlugs((current) => {
+      if (current.includes(slug)) {
+        return current.filter((currentSlug) => currentSlug !== slug);
+      }
+
+      return [...current, slug].slice(0, MAX_URL_SHORTLIST_SIZE);
+    });
+  }, []);
+
+  const removeShortlistRestaurant = useCallback((slug: string) => {
+    setShortlistSlugs((current) =>
+      current.filter((currentSlug) => currentSlug !== slug),
+    );
+  }, []);
+
+  const clearShortlist = useCallback(() => {
+    setShortlistSlugs([]);
+    setShortlistStatus("idle");
+  }, []);
+
   const resetFilters = useCallback(() => {
     closeViewer();
     setViewMode(DEFAULT_VIEW_MODE);
@@ -1165,19 +1295,7 @@ export function CityRestaurantExplorer({
     }
 
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(window.location.href);
-      } else {
-        const textarea = document.createElement("textarea");
-        textarea.value = window.location.href;
-        textarea.setAttribute("readonly", "");
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.append(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        textarea.remove();
-      }
+      await writeClipboardText(window.location.href);
       setShareStatus("copied");
     } catch {
       setShareStatus("failed");
@@ -1193,10 +1311,38 @@ export function CityRestaurantExplorer({
     }, SHARE_STATUS_DURATION_MS);
   }, []);
 
+  const copyShortlistPlan = useCallback(async () => {
+    if (typeof window === "undefined" || shortlistRestaurants.length === 0) {
+      return;
+    }
+
+    try {
+      await writeClipboardText(
+        buildShortlistPlanText(cityMeta.displayName, shortlistRestaurants),
+      );
+      setShortlistStatus("copied");
+    } catch {
+      setShortlistStatus("failed");
+    }
+
+    if (shortlistStatusTimerRef.current !== null) {
+      window.clearTimeout(shortlistStatusTimerRef.current);
+    }
+
+    shortlistStatusTimerRef.current = window.setTimeout(() => {
+      setShortlistStatus("idle");
+      shortlistStatusTimerRef.current = null;
+    }, SHARE_STATUS_DURATION_MS);
+  }, [cityMeta.displayName, shortlistRestaurants]);
+
   useEffect(
     () => () => {
       if (shareStatusTimerRef.current !== null) {
         window.clearTimeout(shareStatusTimerRef.current);
+      }
+
+      if (shortlistStatusTimerRef.current !== null) {
+        window.clearTimeout(shortlistStatusTimerRef.current);
       }
     },
     [],
@@ -1301,12 +1447,20 @@ export function CityRestaurantExplorer({
         const cardSignals = buildCardSignals(restaurant, viewMode);
         const signatureDishes = buildSignatureDishes(restaurant);
         const isActive = restaurant.slug === selectedRestaurant.slug;
+        const isShortlisted = shortlistSlugs.includes(restaurant.slug);
+        const rankingItemClassName = [
+          "ranking-item",
+          isActive ? "is-active" : "",
+          isShortlisted ? "is-shortlisted" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
 
         return (
           <li key={restaurant.slug} className="ranking-list__row">
             <button
               aria-current={isActive ? "true" : undefined}
-              className={isActive ? "ranking-item is-active" : "ranking-item"}
+              className={rankingItemClassName}
               data-restaurant-slug={restaurant.slug}
               onFocus={() => {
                 void fetchRestaurantDetail(restaurant.slug);
@@ -1336,6 +1490,12 @@ export function CityRestaurantExplorer({
                 <div className="ranking-item__headline">
                   <strong>{restaurant.name}</strong>
                 </div>
+
+                {isShortlisted ? (
+                  <span className="ranking-item__shortlistFlag">
+                    In your shortlist
+                  </span>
+                ) : null}
 
                 <p className="ranking-item__summary">{buildListDeck(restaurant)}</p>
 
@@ -1416,11 +1576,12 @@ export function CityRestaurantExplorer({
                   <Image
                     alt={`${restaurant.name} cover photo`}
                     className="ranking-item__image"
-                    fill
+                    height={restaurant.coverImage.height}
                     loading={index < 2 ? "eager" : "lazy"}
                     preload={index === 0}
                     sizes="(max-width: 720px) calc(100vw - 56px), (max-width: 1200px) 44vw, 560px"
                     src={getGalleryImageSrc(restaurant.coverImage, "card")}
+                    width={restaurant.coverImage.width}
                   />
                 ) : (
                   <div className="ranking-item__image ranking-item__image--empty" />
@@ -1439,6 +1600,7 @@ export function CityRestaurantExplorer({
       filteredRestaurants,
       selectRestaurant,
       selectedRestaurant.slug,
+      shortlistSlugs,
       viewMode,
     ],
   );
@@ -1456,10 +1618,11 @@ export function CityRestaurantExplorer({
             <Image
               alt={`${selectedRestaurant.name} ${index + 1}`}
               className="gallery-card__image"
-              fill
+              height={image.height}
               loading={index < 4 ? "eager" : "lazy"}
               sizes={sizes}
               src={getGalleryImageSrc(image, "preview")}
+              width={image.width}
             />
             {hiddenGalleryCount > 0 && index === galleryLayout.length - 1 ? (
               <span className="gallery-card__more">+{hiddenGalleryCount} more</span>
@@ -1495,10 +1658,11 @@ export function CityRestaurantExplorer({
                 <Image
                   alt={`${selectedRestaurant.name} ${item.name}`}
                   className="menu-item__thumbImage"
-                  fill
+                  height={720}
                   loading="lazy"
                   sizes="(max-width: 720px) 92vw, 22vw"
                   src={getMenuImageSrc(item.image, "preview")}
+                  width={900}
                 />
               </span>
             </button>
@@ -1571,10 +1735,11 @@ export function CityRestaurantExplorer({
                               <Image
                                 alt={`${selectedRestaurant.name} ${dish.name}`}
                                 className="tasting-dish__photoImage"
-                                fill
+                                height={900}
                                 loading="lazy"
                                 sizes="(max-width: 720px) 92vw, (max-width: 1180px) 40vw, 18vw"
                                 src={getTastingPhotoSrc(photo.image, "preview")}
+                                width={900}
                               />
                             </span>
                           </button>
@@ -1692,11 +1857,12 @@ export function CityRestaurantExplorer({
                     <Image
                       alt={`${restaurant.name} restaurant preview`}
                       className="topbar__previewImage"
-                      fill
+                      height={240}
                       loading={index === 0 ? "eager" : "lazy"}
                       preload={index === 0}
                       sizes="(max-width: 720px) 30vw, 160px"
                       src={getGalleryImageSrc(restaurant.coverImage, "card")}
+                      width={360}
                     />
                     <span>{restaurant.name}</span>
                   </button>
@@ -1834,6 +2000,141 @@ export function CityRestaurantExplorer({
         </div>
       </section>
 
+      {shortlistRestaurants.length > 0 ? (
+        <section className="shortlist-panel" aria-label="Trip shortlist">
+          <div className="shortlist-panel__head">
+            <div>
+              <p className="section-kicker">Trip shortlist</p>
+              <h2>{shortlistRestaurants.length} saved tables</h2>
+              <p>
+                Compare the rooms that made the cut before opening booking links
+                or sharing the plan.
+              </p>
+            </div>
+            <div className="shortlist-panel__stats">
+              <div>
+                <span>Areas</span>
+                <strong>{shortlistDistricts}</strong>
+              </div>
+              <div>
+                <span>Bookable</span>
+                <strong>
+                  {shortlistBookableCount}/{shortlistRestaurants.length}
+                </strong>
+              </div>
+            </div>
+            <div className="shortlist-panel__actions">
+              <button
+                className="action action--primary action--compact"
+                onClick={() => {
+                  void copyShortlistPlan();
+                }}
+                type="button"
+              >
+                {shortlistStatus === "copied"
+                  ? "Plan copied"
+                  : shortlistStatus === "failed"
+                    ? "Copy failed"
+                    : "Copy plan"}
+              </button>
+              <button
+                className="action action--compact"
+                onClick={clearShortlist}
+                type="button"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <div className="shortlist-rail" aria-label="Saved restaurants">
+            {shortlistRestaurants.map((restaurant, index) => (
+              <article
+                key={restaurant.slug}
+                className={
+                  restaurant.slug === selectedRestaurant.slug
+                    ? "shortlist-card is-active"
+                    : "shortlist-card"
+                }
+              >
+                <button
+                  className="shortlist-card__select"
+                  onClick={() => selectRestaurant(restaurant.slug)}
+                  type="button"
+                >
+                  <span>{formatRank(index)}</span>
+                  <strong>{restaurant.name}</strong>
+                  <small>
+                    {restaurant.district} / {formatPriceBandCompact(restaurant.priceBand)}
+                  </small>
+                </button>
+                <button
+                  aria-label={`Remove ${restaurant.name} from shortlist`}
+                  className="shortlist-card__remove"
+                  onClick={() => removeShortlistRestaurant(restaurant.slug)}
+                  type="button"
+                >
+                  Remove
+                </button>
+              </article>
+            ))}
+          </div>
+
+          <div className="shortlist-compare" role="table">
+            <div className="shortlist-compare__row shortlist-compare__row--head" role="row">
+              <span role="columnheader">Restaurant</span>
+              <span role="columnheader">Why it fits</span>
+              <span role="columnheader">Booking</span>
+              <span role="columnheader">Crowd signal</span>
+              <span role="columnheader">Action</span>
+            </div>
+            {shortlistRestaurants.map((restaurant) => (
+              <div
+                key={restaurant.slug}
+                className="shortlist-compare__row"
+                role="row"
+              >
+                <div role="cell">
+                  <strong>{restaurant.name}</strong>
+                  <span>
+                    {restaurant.district} / {restaurant.cuisineLabel}
+                  </span>
+                </div>
+                <div role="cell">
+                  <span>{shortenText(restaurant.listSummary, 92)}</span>
+                  <small>{restaurant.awardHighlights.join(" / ") || "Local signal"}</small>
+                </div>
+                <div role="cell">
+                  <strong>{formatBookingPressure(restaurant.bookingPressure)}</strong>
+                  <span>{shortenWindow(restaurant.bestWindow)}</span>
+                </div>
+                <div role="cell">
+                  <strong>{restaurant.rating ?? "No rating"}</strong>
+                  <span>{formatReviewCount(restaurant.numRatings, cityMeta.locale)} reviews</span>
+                </div>
+                <div className="shortlist-compare__actions" role="cell">
+                  <button
+                    className="action action--compact"
+                    onClick={() => selectRestaurant(restaurant.slug)}
+                    type="button"
+                  >
+                    Inspect
+                  </button>
+                  <a
+                    className="action action--compact"
+                    href={buildMapsHref(restaurant, cityMeta.displayName)}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Map
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <main className="content-grid">
         <section className="ranking">
           <div className="section-head section-head--ranking">
@@ -1898,11 +2199,12 @@ export function CityRestaurantExplorer({
                 <Image
                   alt={`${selectedRestaurant.name} hero photo`}
                   className="details-head__heroImage"
-                  fill
+                  height={gallery[0].height}
                   loading="eager"
                   preload
                   sizes="(max-width: 1180px) calc(100vw - 40px), 42vw"
                   src={getGalleryImageSrc(gallery[0], "hero")}
+                  width={gallery[0].width}
                 />
                 <span className="details-head__heroLabel">Editorial cover</span>
                 <span className="details-head__heroMeta">
@@ -1949,6 +2251,19 @@ export function CityRestaurantExplorer({
                 >
                   Open map
                 </a>
+                <button
+                  className={
+                    selectedRestaurantIsShortlisted
+                      ? "action action--selected"
+                      : "action"
+                  }
+                  onClick={() => toggleShortlistRestaurant(selectedRestaurant.slug)}
+                  type="button"
+                >
+                  {selectedRestaurantIsShortlisted
+                    ? "Saved to shortlist"
+                    : "Add to shortlist"}
+                </button>
               </div>
             </div>
           </div>

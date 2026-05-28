@@ -58,6 +58,7 @@ body::-webkit-scrollbar-thumb {
 .toolbar,
 .ranking,
 .details,
+.shortlist-panel,
 .story-panel,
 .booking-workbench,
 .booking-stat,
@@ -81,6 +82,11 @@ body::-webkit-scrollbar-thumb {
 .ranking-item__imageMeta,
 .ranking-item__award,
 .ranking-price,
+.shortlist-card,
+.shortlist-card__select,
+.shortlist-card__remove,
+.shortlist-compare,
+.shortlist-compare__row,
 .menu-item,
 .menu-item__thumb,
 .review-card,
@@ -123,6 +129,7 @@ body::-webkit-scrollbar-thumb {
 .toolbar,
 .ranking,
 .details,
+.shortlist-panel,
 .story-panel,
 .booking-workbench,
 .location-showcase__card {
@@ -188,6 +195,8 @@ body::-webkit-scrollbar-thumb {
 
 .topbar__previewItem {
   position: relative;
+  display: block;
+  height: 148px;
   min-height: 148px;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -207,6 +216,8 @@ body::-webkit-scrollbar-thumb {
 }
 
 .topbar__previewImage {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
 }
 
@@ -321,6 +332,7 @@ body::-webkit-scrollbar-thumb {
 .chip.is-active,
 .booking-chip.is-accent,
 .action--primary,
+.action--selected,
 .booking-party__button.is-active,
 .booking-slot.is-selected,
 .media-lightbox__thumb.is-active {
@@ -332,6 +344,201 @@ body::-webkit-scrollbar-thumb {
 .chip__hint {
   color: var(--muted-soft);
   font-size: 0.84rem;
+}
+
+.shortlist-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(207, 176, 123, 0.07), transparent 18rem),
+    rgba(10, 11, 13, 0.92);
+  box-shadow: var(--shadow);
+}
+
+.shortlist-panel__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.shortlist-panel__head h2 {
+  margin: 4px 0 0;
+  font-family: var(--font-editorial), "Times New Roman", serif;
+  font-size: clamp(2rem, 2.4vw, 2.8rem);
+  line-height: 0.98;
+  font-weight: 500;
+}
+
+.shortlist-panel__head p {
+  max-width: 62ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.58;
+}
+
+.shortlist-panel__stats,
+.shortlist-panel__actions,
+.shortlist-compare__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.shortlist-panel__stats div {
+  display: grid;
+  justify-items: center;
+  min-width: 92px;
+  min-height: 72px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  text-align: center;
+}
+
+.shortlist-panel__stats span,
+.shortlist-card__select small,
+.shortlist-compare__row--head,
+.shortlist-compare__row small,
+.shortlist-compare__row span {
+  color: var(--muted-soft);
+}
+
+.shortlist-panel__stats strong {
+  margin-top: 4px;
+  color: var(--foreground);
+  font-size: 1.32rem;
+  line-height: 1;
+}
+
+.shortlist-rail {
+  display: grid;
+  grid-auto-columns: minmax(220px, 1fr);
+  grid-auto-flow: column;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scroll-snap-type: x proximity;
+}
+
+.shortlist-card {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-height: 166px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.024), rgba(255, 255, 255, 0)),
+    rgba(255, 255, 255, 0.018);
+  overflow: hidden;
+  scroll-snap-align: start;
+}
+
+.shortlist-card.is-active {
+  border-color: rgba(157, 190, 180, 0.3);
+  background:
+    linear-gradient(180deg, rgba(157, 190, 180, 0.11), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.02);
+}
+
+.shortlist-card__select,
+.shortlist-card__remove {
+  border: 0;
+  color: inherit;
+  text-align: center;
+}
+
+.shortlist-card__select {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px 16px 14px;
+  background: transparent;
+}
+
+.shortlist-card__select span {
+  display: grid;
+  place-items: center;
+  min-width: 42px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--gold);
+  font-family: var(--font-editorial), "Times New Roman", serif;
+  font-size: 1.36rem;
+  line-height: 1;
+}
+
+.shortlist-card__select strong {
+  font-size: 1.18rem;
+  line-height: 1.18;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.shortlist-card__remove {
+  min-height: 40px;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.shortlist-compare {
+  display: grid;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.shortlist-compare__row {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 0.92fr)
+    minmax(260px, 1.35fr)
+    minmax(190px, 0.85fr)
+    minmax(150px, 0.72fr)
+    minmax(180px, 0.72fr);
+  gap: 14px;
+  min-width: 1000px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+  align-items: center;
+}
+
+.shortlist-compare__row:first-child {
+  border-top: 0;
+}
+
+.shortlist-compare__row--head {
+  min-height: 48px;
+  background: rgba(255, 255, 255, 0.026);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.shortlist-compare__row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.shortlist-compare__row strong {
+  font-weight: 600;
+  line-height: 1.18;
+}
+
+.shortlist-compare__row span,
+.shortlist-compare__row small {
+  line-height: 1.42;
+}
+
+.shortlist-compare__actions {
+  justify-content: flex-start;
 }
 
 .content-grid {
@@ -495,6 +702,10 @@ body::-webkit-scrollbar-thumb {
     0 26px 42px rgba(0, 0, 0, 0.24);
 }
 
+.ranking-item.is-shortlisted {
+  border-color: rgba(207, 176, 123, 0.24);
+}
+
 .ranking-item__rail {
   grid-area: rail;
   grid-template-columns: auto auto;
@@ -553,6 +764,18 @@ body::-webkit-scrollbar-thumb {
   font-size: 1.06rem;
   line-height: 1.7;
   -webkit-line-clamp: 3;
+}
+
+.ranking-item__shortlistFlag {
+  justify-self: center;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid rgba(207, 176, 123, 0.24);
+  border-radius: 8px;
+  background: rgba(207, 176, 123, 0.1);
+  color: #f1d7ab;
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
 .ranking-item__signatureBlock,
@@ -1289,10 +1512,16 @@ body::-webkit-scrollbar-thumb {
 @media (max-width: 1180px) {
   .topbar,
   .content-grid,
+  .shortlist-panel__head,
   .booking-workbench__header,
   .booking-panel,
   .location-showcase {
     grid-template-columns: 1fr;
+  }
+
+  .shortlist-panel__head {
+    justify-items: center;
+    text-align: center;
   }
 
   .details-head {
@@ -1320,6 +1549,7 @@ body::-webkit-scrollbar-thumb {
   .topbar,
   .toolbar,
   .details,
+  .shortlist-panel,
   .story-panel,
   .booking-workbench {
     padding: 16px;
@@ -1358,6 +1588,7 @@ body::-webkit-scrollbar-thumb {
   }
 
   .topbar__previewItem {
+    height: 112px;
     min-height: 112px;
   }
 
@@ -1370,6 +1601,30 @@ body::-webkit-scrollbar-thumb {
 
   .toolbar__row--actions .action {
     flex: 1 1 150px;
+  }
+
+  .shortlist-panel__stats,
+  .shortlist-panel__actions {
+    width: 100%;
+  }
+
+  .shortlist-panel__stats div,
+  .shortlist-panel__actions .action {
+    flex: 1 1 132px;
+  }
+
+  .shortlist-rail {
+    grid-auto-columns: minmax(188px, 78vw);
+  }
+
+  .shortlist-compare__row {
+    min-width: 860px;
+    grid-template-columns:
+      minmax(160px, 0.9fr)
+      minmax(230px, 1.32fr)
+      minmax(168px, 0.84fr)
+      minmax(140px, 0.72fr)
+      minmax(160px, 0.72fr);
   }
 
   .toolbar__row {

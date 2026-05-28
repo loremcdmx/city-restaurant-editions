@@ -31,6 +31,7 @@ describe("Mexico City explorer URL state", () => {
       selectedBands: ["mid", "destination"],
       selectedCuisine: "seafood",
       selectedSlug: "contramar",
+      shortlistSlugs: [],
       viewMode: "google",
     });
   });
@@ -48,8 +49,20 @@ describe("Mexico City explorer URL state", () => {
       selectedBands: urlStateOptions.defaultBands,
       selectedCuisine: urlStateOptions.defaultCuisine,
       selectedSlug: urlStateOptions.defaultSlug,
+      shortlistSlugs: [],
       viewMode: "global",
     });
+  });
+
+  it("keeps a valid de-duplicated shortlist in URL order", () => {
+    const state = readExplorerUrlState(
+      new URLSearchParams(
+        "shortlist=contramar,missing,pujol,contramar&restaurant=contramar",
+      ),
+      urlStateOptions,
+    );
+
+    expect(state.shortlistSlugs).toEqual(["contramar", "pujol"]);
   });
 
   it("serializes only meaningful deviations from the default state", () => {
@@ -60,11 +73,12 @@ describe("Mexico City explorer URL state", () => {
       selectedBands: ["mid"],
       selectedCuisine: "seafood",
       selectedSlug: "contramar",
+      shortlistSlugs: ["pujol", "contramar", "missing"],
       viewMode: "cuisine",
     };
 
     expect(buildExplorerSearchParams(state, urlStateOptions).toString()).toBe(
-      "view=cuisine&restaurant=contramar&q=lunch&bookable=1&cuisine=seafood&prices=mid",
+      "view=cuisine&restaurant=contramar&shortlist=pujol%2Ccontramar&q=lunch&bookable=1&cuisine=seafood&prices=mid",
     );
   });
 });
