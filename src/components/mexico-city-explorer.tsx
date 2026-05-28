@@ -56,6 +56,21 @@ type GalleryLayoutItem = {
 type GalleryImageVariant = "full" | "hero" | "preview" | "card" | "thumb";
 type MenuImageVariant = "full" | "preview" | "thumb";
 
+type ShortlistNextPick = {
+  restaurant: RestaurantListItem;
+  reason: string;
+};
+
+type ShortlistPlannerInsights = {
+  anchor: RestaurantListItem | null;
+  bookingPriority: RestaurantListItem | null;
+  districtCount: number;
+  flexibleBackup: RestaurantListItem | null;
+  nextPicks: ShortlistNextPick[];
+  topDistrict: string | null;
+  topDistrictCount: number;
+};
+
 const VIEW_LABELS: Record<ViewMode, string> = {
   global: "Global",
   trending: "Trending",
@@ -167,6 +182,32 @@ function formatBookingPressure(pressure: Restaurant["bookingPressure"]) {
   }
 }
 
+function getBookingUrgency(pressure: Restaurant["bookingPressure"]) {
+  switch (pressure) {
+    case "two-weeks-plus":
+      return 4;
+    case "one-week":
+      return 3;
+    case "few-days":
+      return 2;
+    case "walk-in":
+      return 1;
+  }
+}
+
+function getPriceWeight(priceBand: PriceBand) {
+  switch (priceBand) {
+    case "destination":
+      return 4;
+    case "high":
+      return 3;
+    case "mid":
+      return 2;
+    case "budget":
+      return 1;
+  }
+}
+
 function formatTastingMenuConfidence(
   confidence: TastingMenuVariation["confidence"],
 ) {
@@ -273,6 +314,7 @@ async function writeClipboardText(value: string) {
 function buildShortlistPlanText(
   cityDisplayName: string,
   restaurants: RestaurantListItem[],
+  insights?: ShortlistPlannerInsights,
 ) {
   const lines = restaurants.map((restaurant, index) =>
     [
@@ -287,7 +329,223 @@ function buildShortlistPlanText(
     ].join(" - "),
   );
 
-  return [`${cityDisplayName} restaurant shortlist`, "", ...lines].join("\n");
+  const plannerLines = insights
+    ? [
+        "",
+        "Planner",
+        insights.bookingPriority
+          ? `Book first: ${insights.bookingPriority.name} (${formatBookingPressure(
+              insights.bookingPriority.bookingPressure,
+            )})`
+          : null,
+        insights.anchor
+          ? `Anchor table: ${insights.anchor.name} (${insights.anchor.district})`
+          : null,
+        insights.flexibleBackup
+          ? `Flexible backup: ${insights.flexibleBackup.name} (${formatBookingPressure(
+              insights.flexibleBackup.bookingPressure,
+            )})`
+          : null,
+        insights.topDistrict
+          ? `Route cluster: ${insights.topDistrict} (${insights.topDistrictCount}/${restaurants.length})`
+          : null,
+      ].filter((line): line is string => Boolean(line))
+    : [];
+
+  const nextPickLines =
+    insights && insights.nextPicks.length > 0
+      ? [
+          "",
+          "Next adds",
+          ...insights.nextPicks.map(
+            ({ restaurant, reason }, index) =>
+              `${index + 1}. ${restaurant.name} - ${reason}`,
+          ),
+        ]
+      : [];
+
+  return [
+    `${cityDisplayName} restaurant shortlist`,
+    "",
+    ...lines,
+    ...plannerLines,
+    ...nextPickLines,
+  ].join("\n");
+}
+
+function buildNextPickReason(
+  restaurant: RestaurantListItem,
+  savedCuisineKeys: Set<CuisineKey>,
+  savedPriceBands: Set<PriceBand>,
+  topDistrict: string | null,
+) {
+  const addsCuisine = restaurant.cuisineKeys.some(
+    (cuisineKey) => !savedCuisineKeys.has(cuisineKey),
+  );
+
+  if (topDistrict && restaurant.district === topDistrict && addsCuisine) {
+    return `Keeps the route in ${topDistrict} while adding ${restaurant.cuisineLabel}.`;
+  }
+
+  if (!savedPriceBands.has(restaurant.priceBand)) {
+    return `Adds a ${formatPriceBandCompact(restaurant.priceBand).toLowerCase()} spend option.`;
+  }
+
+  if (addsCuisine) {
+    return `Adds ${restaurant.cuisineLabel} contrast to the saved list.`;
+  }
+
+  if (restaurant.bookingMode !== "walk-in") {
+    return `${formatBookingPressure(restaurant.bookingPressure)} with a clear booking path.`;
+  }
+
+  return "Useful contrast pick with strong editorial signal.";
+}
+
+function buildShortlistPlannerInsights(
+  shortlistRestaurants: RestaurantListItem[],
+  restaurants: RestaurantListItem[],
+): ShortlistPlannerInsights {
+  if (shortlistRestaurants.length === 0) {
+    return {
+      anchor: null,
+      bookingPriority: null,
+      districtCount: 0,
+      flexibleBackup: null,
+      nextPicks: [],
+      topDistrict: null,
+      topDistrictCount: 0,
+    };
+  }
+
+  const districtScores = new Map<
+    string,
+    {
+      count: number;
+      score: number;
+    }
+  >();
+  const savedCuisineKeys = new Set<CuisineKey>();
+  const savedPriceBands = new Set<PriceBand>();
+  const savedSlugs = new Set(shortlistRestaurants.map((restaurant) => restaurant.slug));
+
+  for (const restaurant of shortlistRestaurants) {
+    savedPriceBands.add(restaurant.priceBand);
+
+    for (const cuisineKey of restaurant.cuisineKeys) {
+      savedCuisineKeys.add(cuisineKey);
+    }
+
+    const current = districtScores.get(restaurant.district) ?? {
+      count: 0,
+      score: 0,
+    };
+
+    districtScores.set(restaurant.district, {
+      count: current.count + 1,
+      score: current.score + restaurant.globalScore,
+    });
+  }
+
+  const sortedDistricts = [...districtScores.entries()].sort(
+    ([leftDistrict, left], [rightDistrict, right]) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return leftDistrict.localeCompare(rightDistrict);
+    },
+  );
+  const [topDistrict, topDistrictStats] = sortedDistricts[0] ?? [null, null];
+  const anchor =
+    [...shortlistRestaurants].sort((left, right) => {
+      if (right.globalScore !== left.globalScore) {
+        return right.globalScore - left.globalScore;
+      }
+
+      return right.guideScore - left.guideScore;
+    })[0] ?? null;
+  const bookingPriority =
+    [...shortlistRestaurants].sort((left, right) => {
+      const urgencyDelta =
+        getBookingUrgency(right.bookingPressure) -
+        getBookingUrgency(left.bookingPressure);
+
+      if (urgencyDelta !== 0) {
+        return urgencyDelta;
+      }
+
+      return right.globalScore - left.globalScore;
+    })[0] ?? null;
+  const flexibleBackup =
+    [...shortlistRestaurants].sort((left, right) => {
+      const urgencyDelta =
+        getBookingUrgency(left.bookingPressure) -
+        getBookingUrgency(right.bookingPressure);
+
+      if (urgencyDelta !== 0) {
+        return urgencyDelta;
+      }
+
+      return (right.numRatings ?? 0) - (left.numRatings ?? 0);
+    })[0] ?? null;
+  const nextPicks = restaurants
+    .filter((restaurant) => !savedSlugs.has(restaurant.slug))
+    .map((restaurant) => {
+      const cuisineBonus = restaurant.cuisineKeys.some(
+        (cuisineKey) => !savedCuisineKeys.has(cuisineKey),
+      )
+        ? 10
+        : 0;
+      const districtBonus =
+        topDistrict && restaurant.district === topDistrict ? 12 : 0;
+      const priceBonus = savedPriceBands.has(restaurant.priceBand) ? 0 : 7;
+      const bookingBonus =
+        restaurant.bookingMode !== "walk-in"
+          ? getBookingUrgency(restaurant.bookingPressure) * 2
+          : 1;
+      const score =
+        restaurant.globalScore +
+        districtBonus +
+        cuisineBonus +
+        priceBonus +
+        bookingBonus +
+        getPriceWeight(restaurant.priceBand);
+
+      return {
+        restaurant,
+        reason: buildNextPickReason(
+          restaurant,
+          savedCuisineKeys,
+          savedPriceBands,
+          topDistrict,
+        ),
+        score,
+      };
+    })
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return right.restaurant.globalScore - left.restaurant.globalScore;
+    })
+    .slice(0, 3)
+    .map(({ restaurant, reason }) => ({ restaurant, reason }));
+
+  return {
+    anchor,
+    bookingPriority,
+    districtCount: districtScores.size,
+    flexibleBackup,
+    nextPicks,
+    topDistrict,
+    topDistrictCount: topDistrictStats?.count ?? 0,
+  };
 }
 
 function formatAwardLabel(award: string) {
@@ -982,12 +1240,14 @@ export function CityRestaurantExplorer({
         ),
     [restaurantsBySlug, shortlistSlugs],
   );
+  const shortlistInsights = useMemo(
+    () => buildShortlistPlannerInsights(shortlistRestaurants, restaurants),
+    [restaurants, shortlistRestaurants],
+  );
   const selectedRestaurantIsShortlisted = shortlistSlugs.includes(
     selectedRestaurant.slug,
   );
-  const shortlistDistricts = new Set(
-    shortlistRestaurants.map((restaurant) => restaurant.district),
-  ).size;
+  const shortlistDistricts = shortlistInsights.districtCount;
   const shortlistBookableCount = shortlistRestaurants.filter(
     (restaurant) => restaurant.bookingMode !== "walk-in",
   ).length;
@@ -1318,7 +1578,11 @@ export function CityRestaurantExplorer({
 
     try {
       await writeClipboardText(
-        buildShortlistPlanText(cityMeta.displayName, shortlistRestaurants),
+        buildShortlistPlanText(
+          cityMeta.displayName,
+          shortlistRestaurants,
+          shortlistInsights,
+        ),
       );
       setShortlistStatus("copied");
     } catch {
@@ -1333,7 +1597,7 @@ export function CityRestaurantExplorer({
       setShortlistStatus("idle");
       shortlistStatusTimerRef.current = null;
     }, SHARE_STATUS_DURATION_MS);
-  }, [cityMeta.displayName, shortlistRestaurants]);
+  }, [cityMeta.displayName, shortlistInsights, shortlistRestaurants]);
 
   useEffect(
     () => () => {
@@ -2046,6 +2310,85 @@ export function CityRestaurantExplorer({
               </button>
             </div>
           </div>
+
+          <div className="shortlist-planner">
+            <article className="shortlist-planner__card">
+              <span>Book first</span>
+              <strong>{shortlistInsights.bookingPriority?.name ?? "No priority"}</strong>
+              <p>
+                {shortlistInsights.bookingPriority
+                  ? `${formatBookingPressure(
+                      shortlistInsights.bookingPriority.bookingPressure,
+                    )}. Lock this before filling backup slots.`
+                  : "Save a restaurant to build a booking order."}
+              </p>
+            </article>
+            <article className="shortlist-planner__card">
+              <span>Anchor table</span>
+              <strong>{shortlistInsights.anchor?.name ?? "No anchor"}</strong>
+              <p>
+                {shortlistInsights.anchor
+                  ? `${shortlistInsights.anchor.district} / ${shortlistInsights.anchor.cuisineLabel}. Use it as the fixed point for the night.`
+                  : "The strongest saved venue becomes the anchor."}
+              </p>
+            </article>
+            <article className="shortlist-planner__card">
+              <span>Route cluster</span>
+              <strong>{shortlistInsights.topDistrict ?? "No cluster"}</strong>
+              <p>
+                {shortlistInsights.topDistrict
+                  ? `${shortlistInsights.topDistrictCount} of ${shortlistRestaurants.length} saved places sit in this area.`
+                  : "Save places to see whether the night should cluster or split."}
+              </p>
+            </article>
+            <article className="shortlist-planner__card">
+              <span>Flexible backup</span>
+              <strong>{shortlistInsights.flexibleBackup?.name ?? "No backup"}</strong>
+              <p>
+                {shortlistInsights.flexibleBackup
+                  ? `${formatBookingPressure(
+                      shortlistInsights.flexibleBackup.bookingPressure,
+                    )}. Keep this ready if the anchor slips.`
+                  : "The lowest-friction saved option appears here."}
+              </p>
+            </article>
+          </div>
+
+          {shortlistInsights.nextPicks.length > 0 ? (
+            <div className="shortlist-next">
+              <div className="shortlist-next__head">
+                <p className="section-kicker">Next best adds</p>
+                <strong>Complete the plan</strong>
+              </div>
+              <div className="shortlist-next__grid">
+                {shortlistInsights.nextPicks.map(({ restaurant, reason }) => (
+                  <article key={restaurant.slug} className="shortlist-next__card">
+                    <div>
+                      <span>{restaurant.district}</span>
+                      <strong>{restaurant.name}</strong>
+                      <p>{reason}</p>
+                    </div>
+                    <div className="shortlist-next__actions">
+                      <button
+                        className="action action--compact"
+                        onClick={() => selectRestaurant(restaurant.slug)}
+                        type="button"
+                      >
+                        Inspect
+                      </button>
+                      <button
+                        className="action action--primary action--compact"
+                        onClick={() => toggleShortlistRestaurant(restaurant.slug)}
+                        type="button"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="shortlist-rail" aria-label="Saved restaurants">
             {shortlistRestaurants.map((restaurant, index) => (
